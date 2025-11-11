@@ -327,8 +327,9 @@ async function batchPublishProducts(productIds) {
 
 /**
  * Query for ACTIVE products with untracked inventory variants
- * Filters server-side for inventory_total:0 (candidates for untracked or out-of-stock)
- * Gets the first 200 such products that are truly untracked
+ * Fetches all ACTIVE products (up to 10 pages = 2500 products max)
+ * Checks each variant client-side for tracked === false
+ * Returns first 200 products that have at least one untracked variant
  * @returns {Promise<Array>} - Array of product objects with untracked inventory
  */
 async function getActiveProductsWithUntrackedInventory() {
@@ -336,7 +337,7 @@ async function getActiveProductsWithUntrackedInventory() {
   let productCount = 0;
   const maxProducts = 200;
   let pageCount = 0;
-  const maxPages = 10; // Safety limit (250*10 = 2500 checked max)
+  const maxPages = 50; // Safety limit (250*50 = 12,500 products checked max - you said 5000+ untracked so this is safe)
   let hasNextPage = true;
   let cursor = null;
 
@@ -347,11 +348,12 @@ async function getActiveProductsWithUntrackedInventory() {
 
     try {
       // Build query based on pagination
-      // Use inventory_total:0 to filter server-side (untracked products have 0 total)
+      // Query ALL ACTIVE products (untracked products can have any inventory level, not just 0)
+      // We filter client-side for tracked:false variants
       const currentQuery = cursor
         ? `
           query($after: String) {
-            products(first: 250, query: "status:ACTIVE AND inventory_total:0", after: $after) {
+            products(first: 250, query: "status:ACTIVE", after: $after) {
               edges {
                 node {
                   id
@@ -384,7 +386,7 @@ async function getActiveProductsWithUntrackedInventory() {
         `
         : `
           query {
-            products(first: 250, query: "status:ACTIVE AND inventory_total:0") {
+            products(first: 250, query: "status:ACTIVE") {
               edges {
                 node {
                   id
@@ -464,10 +466,21 @@ async function getActiveProductsWithUntrackedInventory() {
           variantCursor = variantData.pageInfo.endCursor;
         }
 
-        // Check if at least one variant has untracked inventory (tracked: false)
+        // Check if at least one variant has untracked inventory
+        // Handle three cases:
+        // 1. inventoryItem exists with tracked === false (explicitly untracked)
+        // 2. inventoryItem is null (implicitly untracked/not managed)
         const hasUntrackedInventory = allVariants.some((variantEdge) => {
           const inventoryItem = variantEdge.node.inventoryItem;
-          return inventoryItem && inventoryItem.tracked === false;
+          // Count as untracked if: inventoryItem is null OR tracked is explicitly false
+          const isUntracked = inventoryItem === null || (inventoryItem && inventoryItem.tracked === false);
+
+          // Debug logging for first few products
+          if (productCount < 3) {
+            console.log(`    Variant ${variantEdge.node.id}: inventoryItem=${JSON.stringify(inventoryItem)}, isUntracked=${isUntracked}`);
+          }
+
+          return isUntracked;
         });
 
         // Only include products with untracked inventory (skip tracked out-of-stock)
@@ -481,6 +494,8 @@ async function getActiveProductsWithUntrackedInventory() {
           });
           productCount++;
           console.log(`  Found untracked product: ${product.title} (${product.id})`);
+        } else if (productCount < 3) {
+          console.log(`  Skipped (tracked): ${product.title} (${product.id})`);
         }
       }
 
