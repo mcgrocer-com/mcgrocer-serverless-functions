@@ -40,7 +40,8 @@ async function shopifyGraphqlRequest(query, variables = {}) {
 
 /**
  * Query for all draft products with exactly 1000 total inventory
- * Uses server-side filtering with inventory_total for accuracy
+ * Filters by server-side inventory_total and verifies tracked inventory
+ * Excludes products with "inventory not tracked" status
  * @returns {Promise<Array>} - Array of product objects
  */
 async function getDraftProductsWithExactInventory() {
@@ -62,6 +63,16 @@ async function getDraftProductsWithExactInventory() {
                 handle
                 status
                 totalInventory
+                variants(first: 250) {
+                  edges {
+                    node {
+                      id
+                      inventoryItem {
+                        tracked
+                      }
+                    }
+                  }
+                }
               }
             }
             pageInfo {
@@ -81,6 +92,16 @@ async function getDraftProductsWithExactInventory() {
                 handle
                 status
                 totalInventory
+                variants(first: 250) {
+                  edges {
+                    node {
+                      id
+                      inventoryItem {
+                        tracked
+                      }
+                    }
+                  }
+                }
               }
             }
             pageInfo {
@@ -95,21 +116,38 @@ async function getDraftProductsWithExactInventory() {
     const result = await shopifyGraphqlRequest(currentQuery, variables);
     const productsData = result.products;
 
-    // Add all products (already filtered server-side by Shopify)
+    // Filter products with exactly 1000 inventory AND tracked inventory
     productsData.edges.forEach((edge) => {
       const product = edge.node;
-      // Optional: Verify total (should always be 1000, but log if not)
+
+      // Verify total is exactly 1000
       if (product.totalInventory !== 1000) {
         console.warn(
           `⚠ Unexpected inventory for product ${product.id}: ${product.totalInventory} (expected 1000)`
         );
+        return; // Skip this product
       }
-      products.push({
-        id: product.id,
-        title: product.title,
-        handle: product.handle,
-        totalInventory: product.totalInventory,
+
+      // Check if at least one variant has tracked inventory
+      const variantEdges = product.variants?.edges || [];
+      const hasTrackedInventory = variantEdges.some((variantEdge) => {
+        const inventoryItem = variantEdge.node.inventoryItem;
+        return inventoryItem && inventoryItem.tracked === true;
       });
+
+      // Only include products with tracked inventory
+      if (hasTrackedInventory) {
+        products.push({
+          id: product.id,
+          title: product.title,
+          handle: product.handle,
+          totalInventory: product.totalInventory,
+        });
+      } else {
+        console.log(
+          `⊘ Skipped product with untracked inventory: ${product.title} (${product.id})`
+        );
+      }
     });
 
     hasNextPage = productsData.pageInfo.hasNextPage;
