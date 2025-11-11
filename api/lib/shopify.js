@@ -335,74 +335,118 @@ async function batchPublishProducts(productIds) {
  */
 async function getActiveProductsWithUntrackedInventory() {
   const untrackedProducts = [];
+  let pageCount = 0;
+  let hasNextPage = true;
+  let cursor = null;
 
-  console.log('Fetching first page of ACTIVE products to check for tracked:false variants...');
-  const pageStartTime = Date.now();
+  console.log('Fetching ACTIVE products to check for tracked:false variants...');
 
-  try {
-    const query = `
-      query {
-        products(first: 250, query: "status:ACTIVE") {
-          edges {
-            node {
-              id
-              title
-              handle
-              status
-              totalInventory
-              variants(first: 250) {
-                edges {
-                  node {
-                    id
-                    inventoryItem {
-                      tracked
+  while (hasNextPage && untrackedProducts.length < 200) {
+    pageCount++;
+    console.log(`  Fetching page ${pageCount}...`);
+    const pageStartTime = Date.now();
+
+    try {
+      const currentQuery = cursor
+        ? `
+          query($after: String) {
+            products(first: 250, query: "status:ACTIVE", after: $after) {
+              edges {
+                node {
+                  id
+                  title
+                  handle
+                  status
+                  totalInventory
+                  variants(first: 250) {
+                    edges {
+                      node {
+                        id
+                        inventoryItem {
+                          tracked
+                        }
+                      }
                     }
                   }
                 }
               }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
             }
           }
-          pageInfo {
-            hasNextPage
+        `
+        : `
+          query {
+            products(first: 250, query: "status:ACTIVE") {
+              edges {
+                node {
+                  id
+                  title
+                  handle
+                  status
+                  totalInventory
+                  variants(first: 250) {
+                    edges {
+                      node {
+                        id
+                        inventoryItem {
+                          tracked
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
           }
+        `;
+
+      const variables = cursor ? { after: cursor } : {};
+      const result = await shopifyGraphqlRequest(currentQuery, variables);
+      const productsData = result.products;
+      const pageEndTime = Date.now();
+
+      console.log(`    Page ${pageCount}: ${productsData.edges.length} products in ${pageEndTime - pageStartTime}ms`);
+
+      // Check each product for variants with tracked:false
+      for (const edge of productsData.edges) {
+        if (untrackedProducts.length >= 200) break;
+
+        const product = edge.node;
+
+        // Check if any variant has tracked === false
+        const hasUntrackedVariant = (product.variants?.edges || []).some((variantEdge) => {
+          const inventoryItem = variantEdge.node.inventoryItem;
+          return inventoryItem && inventoryItem.tracked === false;
+        });
+
+        if (hasUntrackedVariant) {
+          untrackedProducts.push({
+            id: product.id,
+            title: product.title,
+            handle: product.handle,
+            status: product.status,
+            totalInventory: product.totalInventory,
+          });
         }
       }
-    `;
 
-    const result = await shopifyGraphqlRequest(query);
-    const productsData = result.products;
-    const pageEndTime = Date.now();
+      hasNextPage = productsData.pageInfo.hasNextPage && untrackedProducts.length < 200;
+      cursor = productsData.pageInfo.endCursor;
 
-    console.log(`Fetched ${productsData.edges.length} products in ${pageEndTime - pageStartTime}ms`);
-    console.log(`More pages available: ${productsData.pageInfo.hasNextPage}`);
-
-    // Check each product for variants with tracked:false
-    for (const edge of productsData.edges) {
-      const product = edge.node;
-
-      // Check if any variant has tracked === false
-      const hasUntrackedVariant = (product.variants?.edges || []).some((variantEdge) => {
-        const inventoryItem = variantEdge.node.inventoryItem;
-        return inventoryItem && inventoryItem.tracked === false;
-      });
-
-      if (hasUntrackedVariant) {
-        untrackedProducts.push({
-          id: product.id,
-          title: product.title,
-          handle: product.handle,
-          status: product.status,
-          totalInventory: product.totalInventory,
-        });
-      }
+    } catch (error) {
+      console.error(`Error on page ${pageCount}:`, error.message);
+      throw error;
     }
-
-  } catch (error) {
-    console.error(`Error fetching products:`, error.message);
-    throw error;
   }
 
-  console.log(`Query complete: Found ${untrackedProducts.length} products with tracked:false variants in first page`);
+  console.log(`Query complete: Found ${untrackedProducts.length} products with tracked:false variants across ${pageCount} pages`);
 
   return untrackedProducts;
 }
