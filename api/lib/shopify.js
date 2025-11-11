@@ -333,19 +333,20 @@ async function batchPublishProducts(productIds) {
  * - inventory_total:0 = products with exactly 0 inventory
  * - -inventory_total:* = products where inventory_total field is null (untracked)
  *
- * Returns first 200 products matching the filter.
+ * Fetches ALL products matching the filter to get total count,
+ * then returns first 200.
  *
- * @returns {Promise<Array>} - Array of first 200 products matching the filter
+ * @returns {Promise<object>} - Object with totalMatching (all) and products (first 200)
  */
 async function getActiveProductsWithUntrackedInventory() {
-  const products = [];
+  const allProducts = [];
   let pageCount = 0;
   let hasNextPage = true;
   let cursor = null;
 
-  console.log('Fetching ACTIVE products matching filter (inventory_total:0 OR -inventory_total:*)...');
+  console.log('Fetching ALL ACTIVE products matching filter (inventory_total:0 OR -inventory_total:*)...');
 
-  while (hasNextPage && products.length < 200) {
+  while (hasNextPage) {
     pageCount++;
     console.log(`  Fetching page ${pageCount}...`);
     const pageStartTime = Date.now();
@@ -398,20 +399,18 @@ async function getActiveProductsWithUntrackedInventory() {
 
       console.log(`    Page ${pageCount}: ${productsData.edges.length} products returned in ${pageEndTime - pageStartTime}ms`);
 
-      // Add products from this page
+      // Add all products from this page
       for (const edge of productsData.edges) {
-        if (products.length < 200) {
-          products.push({
-            id: edge.node.id,
-            title: edge.node.title,
-            handle: edge.node.handle,
-            status: edge.node.status,
-            totalInventory: edge.node.totalInventory,
-          });
-        }
+        allProducts.push({
+          id: edge.node.id,
+          title: edge.node.title,
+          handle: edge.node.handle,
+          status: edge.node.status,
+          totalInventory: edge.node.totalInventory,
+        });
       }
 
-      hasNextPage = productsData.pageInfo.hasNextPage && products.length < 200;
+      hasNextPage = productsData.pageInfo.hasNextPage;
       cursor = productsData.pageInfo.endCursor;
 
     } catch (error) {
@@ -420,8 +419,13 @@ async function getActiveProductsWithUntrackedInventory() {
     }
   }
 
-  console.log(`Query complete: Found ${products.length} products matching filter`);
-  return products;
+  console.log(`Query complete: Found ${allProducts.length} TOTAL products matching filter across ${pageCount} pages`);
+
+  // Return both total count and first 200 for processing
+  return {
+    totalMatching: allProducts.length,
+    products: allProducts.slice(0, 200),
+  };
 }
 
 /**
