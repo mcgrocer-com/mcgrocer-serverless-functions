@@ -48,8 +48,10 @@ mcgrocer-serverless-functions/
 1. In your app page, go to **Configuration** tab
 2. Scroll to **Admin API access scopes**
 3. Enable these scopes:
-   - `write_products` - To update product status
-   - `read_inventory` - To check inventory levels
+   - `read_products` - To query draft products
+   - `write_products` - To update product status to ACTIVE
+   - `read_publications` - To find the Online Store publication
+   - `write_publications` - To publish products to the Online Store
 4. Save and wait for confirmation
 
 ### Step 3: Generate Access Token
@@ -106,8 +108,11 @@ This means:
 
 1. **Query Phase**: The function queries all DRAFT products from Shopify
 2. **Filter Phase**: Products are filtered to find those with exactly 1000 total inventory stock
-3. **Publish Phase**: All matching products are set to ACTIVE status
-4. **Response**: Returns a JSON report with success/failure details
+3. **Activation Phase**: All matching products are set to ACTIVE status
+4. **Publication Phase**: Products are published to the Online Store to make them visible to customers
+5. **Response**: Returns a JSON report with success/failure details
+
+**Important**: Products must be both ACTIVE and published to the Online Store channel to be visible on your storefront. This automation handles both steps.
 
 ### API Response
 
@@ -217,10 +222,18 @@ Each cron execution logs:
 
 ### Product Update Failures
 
-**Error**: `user errors` in response
+**Error**: `user errors` in response or "Failed to update product"
 - Check that your private app has `write_products` scope
 - Verify product IDs are valid Shopify IDs
 - Check Shopify's API documentation for specific error messages
+
+### Products Not Visible After Publishing
+
+**Symptom**: Product status is ACTIVE but not visible on the storefront
+- Check that your private app has both `read_publications` and `write_publications` scopes
+- Verify the Online Store publication exists in your Shopify admin
+- Check the function logs to ensure the `publishablePublish` mutation succeeded
+- Manually check: In Shopify admin, go to Products → Product → View on Online Store
 
 ### Missing Products
 
