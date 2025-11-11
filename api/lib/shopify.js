@@ -39,7 +39,8 @@ async function shopifyGraphqlRequest(query, variables = {}) {
 }
 
 /**
- * Query for all draft products with exactly 1000 inventory stock
+ * Query for all draft products with exactly 1000 total inventory
+ * Uses server-side filtering with inventory_total for accuracy
  * @returns {Promise<Array>} - Array of product objects
  */
 async function getDraftProductsWithExactInventory() {
@@ -47,27 +48,20 @@ async function getDraftProductsWithExactInventory() {
   let hasNextPage = true;
   let cursor = null;
 
-  // Paginate through all draft products
+  // Paginate through all matching products (filtered server-side by Shopify)
   while (hasNextPage) {
     // Build query based on whether we're paginating or on first page
     const currentQuery = cursor
       ? `
         query($after: String) {
-          products(first: 250, query: "status:DRAFT", after: $after) {
+          products(first: 250, query: "status:DRAFT AND inventory_total:1000", after: $after) {
             edges {
               node {
                 id
                 title
                 handle
                 status
-                variants(first: 250) {
-                  edges {
-                    node {
-                      id
-                      inventoryQuantity
-                    }
-                  }
-                }
+                totalInventory
               }
             }
             pageInfo {
@@ -79,21 +73,14 @@ async function getDraftProductsWithExactInventory() {
       `
       : `
         query {
-          products(first: 250, query: "status:DRAFT") {
+          products(first: 250, query: "status:DRAFT AND inventory_total:1000") {
             edges {
               node {
                 id
                 title
                 handle
                 status
-                variants(first: 250) {
-                  edges {
-                    node {
-                      id
-                      inventoryQuantity
-                    }
-                  }
-                }
+                totalInventory
               }
             }
             pageInfo {
@@ -108,22 +95,21 @@ async function getDraftProductsWithExactInventory() {
     const result = await shopifyGraphqlRequest(currentQuery, variables);
     const productsData = result.products;
 
-    // Filter products with exactly 1000 total inventory
+    // Add all products (already filtered server-side by Shopify)
     productsData.edges.forEach((edge) => {
       const product = edge.node;
-      const totalInventory = product.variants.edges.reduce(
-        (sum, variantEdge) => sum + (variantEdge.node.inventoryQuantity || 0),
-        0
-      );
-
-      if (totalInventory === 1000) {
-        products.push({
-          id: product.id,
-          title: product.title,
-          handle: product.handle,
-          totalInventory,
-        });
+      // Optional: Verify total (should always be 1000, but log if not)
+      if (product.totalInventory !== 1000) {
+        console.warn(
+          `⚠ Unexpected inventory for product ${product.id}: ${product.totalInventory} (expected 1000)`
+        );
       }
+      products.push({
+        id: product.id,
+        title: product.title,
+        handle: product.handle,
+        totalInventory: product.totalInventory,
+      });
     });
 
     hasNextPage = productsData.pageInfo.hasNextPage;
