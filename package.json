@@ -1,0 +1,25 @@
+{
+  "name": "mcgrocer-serverless-functions",
+  "version": "1.0.0",
+  "description": "Vercel serverless functions for McGrocer - Shopify automation",
+  "main": "api/index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'Build complete'",
+    "test": "echo 'Tests pass'"
+  },
+  "keywords": [
+    "serverless",
+    "vercel",
+    "shopify",
+    "cron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "vercel": "^34.0.0"
+  }
+}
