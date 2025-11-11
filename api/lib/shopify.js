@@ -341,7 +341,7 @@ async function getActiveProductsWithUntrackedInventory() {
 
   console.log('Fetching ACTIVE products to check for tracked:false variants...');
 
-  while (hasNextPage && untrackedProducts.length < 200) {
+  while (hasNextPage) {
     pageCount++;
     console.log(`  Fetching page ${pageCount}...`);
     const pageStartTime = Date.now();
@@ -416,8 +416,6 @@ async function getActiveProductsWithUntrackedInventory() {
 
       // Check each product for variants with tracked:false
       for (const edge of productsData.edges) {
-        if (untrackedProducts.length >= 200) break;
-
         const product = edge.node;
 
         // Check if any variant has tracked === false
@@ -437,7 +435,7 @@ async function getActiveProductsWithUntrackedInventory() {
         }
       }
 
-      hasNextPage = productsData.pageInfo.hasNextPage && untrackedProducts.length < 200;
+      hasNextPage = productsData.pageInfo.hasNextPage;
       cursor = productsData.pageInfo.endCursor;
 
     } catch (error) {
