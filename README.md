@@ -4,7 +4,7 @@ Vercel serverless functions for McGrocer Shopify store automation.
 
 ## Features
 
-- **Automated Product Publishing**: Cron job that runs every 2 hours
+- **Automated Product Publishing**: Cron job that runs every 12 hours
 - **Smart Filtering**: Finds all DRAFT products with exactly 1000 inventory stock
 - **Batch Publishing**: Publishes matching products to ACTIVE status
 - **Error Handling**: Comprehensive logging and error reporting
@@ -86,7 +86,7 @@ mcgrocer-serverless-functions/
 
 3. Verify deployment:
    - Go to **Deployments** and check that the latest deploy was successful
-   - The cron should start running on the schedule (every 2 hours)
+   - The cron should start running on the schedule (every 12 hours)
 
 ## How It Works
 
@@ -94,13 +94,13 @@ mcgrocer-serverless-functions/
 
 The job runs on the schedule defined in `vercel.json`:
 ```json
-"schedule": "0 */2 * * *"
+"schedule": "0 */12 * * *"
 ```
 
 This means:
-- Every 2 hours
+- Every 12 hours
 - At minute 0
-- Example times: 12:00 AM, 2:00 AM, 4:00 AM, etc. (UTC)
+- Example times: 12:00 AM, 12:00 PM, etc. (UTC)
 
 ### Execution Flow
 
