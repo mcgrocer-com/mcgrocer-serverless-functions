@@ -327,30 +327,31 @@ async function batchPublishProducts(productIds) {
 
 /**
  * Query for ACTIVE products with untracked inventory variants
- *
- * Fetches ALL ACTIVE products and checks client-side for variants with tracked:false
- * This avoids relying on Shopify's search syntax which may not work as expected.
- *
- * @returns {Promise<object>} - Object with totalFetched and untracked (first 200 with tracked:false)
+ * Uses server-side filter: status:ACTIVE AND inventory_total:<=0 (candidates for untracked or out-of-stock)
+ * Then checks client-side for inventoryItem.tracked === false (true untracked)
+ * Gets the first 200 such products
+ * @returns {Promise<Array>} - Array of product objects with untracked inventory
  */
 async function getActiveProductsWithUntrackedInventory() {
-  const untrackedProducts = [];
+  const products = [];
+  let productCount = 0;
+  const maxProducts = 200;
   let pageCount = 0;
+  const maxPages = 10; // Safety limit (250*10 = 2500 checked max)
   let hasNextPage = true;
   let cursor = null;
 
-  console.log('Fetching ACTIVE products to check for tracked:false variants...');
+  console.log('Fetching ACTIVE products with inventory_total:<=0 to check for tracked:false variants...');
 
-  while (hasNextPage) {
+  while (hasNextPage && productCount < maxProducts && pageCount < maxPages) {
     pageCount++;
-    console.log(`  Fetching page ${pageCount}...`);
     const pageStartTime = Date.now();
 
     try {
       const currentQuery = cursor
         ? `
           query($after: String) {
-            products(first: 250, query: "status:ACTIVE", after: $after) {
+            products(first: 250, query: "status:ACTIVE AND inventory_total:<=0", after: $after) {
               edges {
                 node {
                   id
@@ -366,6 +367,10 @@ async function getActiveProductsWithUntrackedInventory() {
                           tracked
                         }
                       }
+                    }
+                    pageInfo {
+                      hasNextPage
+                      endCursor
                     }
                   }
                 }
@@ -379,7 +384,7 @@ async function getActiveProductsWithUntrackedInventory() {
         `
         : `
           query {
-            products(first: 250, query: "status:ACTIVE") {
+            products(first: 250, query: "status:ACTIVE AND inventory_total:<=0") {
               edges {
                 node {
                   id
@@ -396,6 +401,10 @@ async function getActiveProductsWithUntrackedInventory() {
                         }
                       }
                     }
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
                   }
                 }
               }
@@ -408,30 +417,73 @@ async function getActiveProductsWithUntrackedInventory() {
         `;
 
       const variables = cursor ? { after: cursor } : {};
+      console.log(`  Requesting GraphQL for page ${pageCount}...`);
       const result = await shopifyGraphqlRequest(currentQuery, variables);
+      console.log(`  Received GraphQL response for page ${pageCount}`);
       const productsData = result.products;
       const pageEndTime = Date.now();
+      console.log(`  Page ${pageCount} returned ${productsData.edges.length} products in ${pageEndTime - pageStartTime}ms`);
 
-      console.log(`    Page ${pageCount}: ${productsData.edges.length} products in ${pageEndTime - pageStartTime}ms`);
-
-      // Check each product for variants with tracked:false
+      // For each product, handle variant pagination if >250 variants
       for (const edge of productsData.edges) {
-        const product = edge.node;
+        if (productCount >= maxProducts) break;
 
-        // Check if any variant has tracked === false
-        const hasUntrackedVariant = (product.variants?.edges || []).some((variantEdge) => {
+        const product = edge.node;
+        let allVariants = [];
+        let variantHasNext = product.variants?.pageInfo?.hasNextPage || false;
+        let variantCursor = product.variants?.pageInfo?.endCursor || null;
+
+        // Add initial variants from first page
+        allVariants.push(...(product.variants?.edges || []));
+
+        // Paginate variants if there are more
+        while (variantHasNext) {
+          const variantQuery = `
+            query($productId: ID!, $after: String) {
+              product(id: $productId) {
+                variants(first: 250, after: $after) {
+                  edges {
+                    node {
+                      id
+                      inventoryItem {
+                        tracked
+                      }
+                    }
+                  }
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                }
+              }
+            }
+          `;
+
+          const variantVariables = { productId: product.id, after: variantCursor };
+          const variantResult = await shopifyGraphqlRequest(variantQuery, variantVariables);
+          const variantData = variantResult.product.variants;
+          allVariants.push(...variantData.edges);
+          variantHasNext = variantData.pageInfo.hasNextPage;
+          variantCursor = variantData.pageInfo.endCursor;
+        }
+
+        // Check if at least one variant is untracked (tracked === false)
+        const hasUntrackedInventory = allVariants.some((variantEdge) => {
           const inventoryItem = variantEdge.node.inventoryItem;
           return inventoryItem && inventoryItem.tracked === false;
         });
 
-        if (hasUntrackedVariant) {
-          untrackedProducts.push({
+        // Only include true untracked products (skip tracked with 0 inventory)
+        if (hasUntrackedInventory) {
+          products.push({
             id: product.id,
             title: product.title,
             handle: product.handle,
             status: product.status,
             totalInventory: product.totalInventory,
           });
+          productCount++;
+          console.log(`  Found untracked product: ${product.title} (${product.id})`);
         }
       }
 
@@ -444,9 +496,8 @@ async function getActiveProductsWithUntrackedInventory() {
     }
   }
 
-  console.log(`Query complete: Found ${untrackedProducts.length} products with tracked:false variants across ${pageCount} pages`);
-
-  return untrackedProducts;
+  console.log(`Query complete. Found ${products.length} untracked products after ${pageCount} pages`);
+  return products;
 }
 
 /**
