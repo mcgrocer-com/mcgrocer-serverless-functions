@@ -325,9 +325,211 @@ async function batchPublishProducts(productIds) {
   return results;
 }
 
+/**
+ * Query for ACTIVE products with untracked inventory variants
+ * Gets the first 200 products
+ * @returns {Promise<Array>} - Array of product objects with untracked inventory
+ */
+async function getActiveProductsWithUntrackedInventory() {
+  const products = [];
+  let productCount = 0;
+  const maxProducts = 200;
+
+  const query = `
+    query {
+      products(first: 250, query: "status:ACTIVE") {
+        edges {
+          node {
+            id
+            title
+            handle
+            status
+            totalInventory
+            variants(first: 250) {
+              edges {
+                node {
+                  id
+                  inventoryItem {
+                    tracked
+                  }
+                }
+              }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  `;
+
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage && productCount < maxProducts) {
+    // Build query based on pagination
+    const currentQuery = cursor
+      ? `
+        query($after: String) {
+          products(first: 250, query: "status:ACTIVE", after: $after) {
+            edges {
+              node {
+                id
+                title
+                handle
+                status
+                totalInventory
+                variants(first: 250) {
+                  edges {
+                    node {
+                      id
+                      inventoryItem {
+                        tracked
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      `
+      : query;
+
+    const variables = cursor ? { after: cursor } : {};
+    const result = await shopifyGraphqlRequest(currentQuery, variables);
+    const productsData = result.products;
+
+    // Filter products with at least one untracked inventory variant
+    productsData.edges.forEach((edge) => {
+      if (productCount >= maxProducts) return;
+
+      const product = edge.node;
+
+      // Check if at least one variant has untracked inventory
+      const variantEdges = product.variants?.edges || [];
+      const hasUntrackedInventory = variantEdges.some((variantEdge) => {
+        const inventoryItem = variantEdge.node.inventoryItem;
+        return inventoryItem && inventoryItem.tracked === false;
+      });
+
+      // Only include products with untracked inventory
+      if (hasUntrackedInventory) {
+        products.push({
+          id: product.id,
+          title: product.title,
+          handle: product.handle,
+          status: product.status,
+          totalInventory: product.totalInventory,
+        });
+        productCount++;
+      }
+    });
+
+    hasNextPage = productsData.pageInfo.hasNextPage && productCount < maxProducts;
+    cursor = productsData.pageInfo.endCursor;
+  }
+
+  return products;
+}
+
+/**
+ * Revert a product to DRAFT status
+ * @param {string} productId - Shopify product ID
+ * @returns {Promise<object>} - Updated product data
+ */
+async function revertProductToDraft(productId) {
+  const updateQuery = `
+    mutation($input: ProductInput!) {
+      productUpdate(input: $input) {
+        product {
+          id
+          title
+          status
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const updateVariables = {
+    input: {
+      id: productId,
+      status: 'DRAFT',
+    },
+  };
+
+  const updateData = await shopifyGraphqlRequest(updateQuery, updateVariables);
+
+  if (updateData.productUpdate.userErrors && updateData.productUpdate.userErrors.length > 0) {
+    throw new Error(
+      `Failed to revert product to draft: ${JSON.stringify(updateData.productUpdate.userErrors)}`
+    );
+  }
+
+  return updateData.productUpdate.product;
+}
+
+/**
+ * Batch revert multiple products to DRAFT status
+ * @param {Array<string>} productIds - Array of Shopify product IDs
+ * @returns {Promise<object>} - Results of the batch operation
+ */
+async function batchRevertProductsToDraft(productIds) {
+  const results = {
+    successful: [],
+    failed: [],
+  };
+
+  const chunkSize = 10; // Process 10 products in parallel at a time
+
+  // Process products in chunks to avoid overwhelming API rate limits
+  for (let i = 0; i < productIds.length; i += chunkSize) {
+    const chunk = productIds.slice(i, i + chunkSize);
+
+    // Process all products in the chunk in parallel
+    const promises = chunk.map(async (productId) => {
+      try {
+        const product = await revertProductToDraft(productId);
+        results.successful.push({
+          id: productId,
+          title: product.title,
+          status: product.status,
+        });
+        console.log(`✓ Reverted product to draft: ${product.title} (${productId})`);
+        return { success: true, productId };
+      } catch (error) {
+        results.failed.push({
+          id: productId,
+          error: error.message,
+        });
+        console.error(`✗ Failed to revert product ${productId}:`, error.message);
+        return { success: false, productId };
+      }
+    });
+
+    // Wait for the entire chunk to complete before moving to the next one
+    await Promise.all(promises);
+  }
+
+  return results;
+}
+
 module.exports = {
   shopifyGraphqlRequest,
   getDraftProductsWithExactInventory,
   publishProduct,
   batchPublishProducts,
+  getActiveProductsWithUntrackedInventory,
+  revertProductToDraft,
+  batchRevertProductsToDraft,
 };
