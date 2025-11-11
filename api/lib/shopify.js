@@ -327,9 +327,14 @@ async function batchPublishProducts(productIds) {
 
 /**
  * Query for ACTIVE products with untracked inventory variants
- * Fetches all ACTIVE products (up to 10 pages = 2500 products max)
- * Checks each variant client-side for tracked === false
+ * Uses server-side filter: inventory_total:0 OR -inventory_total:* (untracked products)
+ * Then verifies client-side that tracked === false (to exclude tracked out-of-stock)
  * Returns first 200 products that have at least one untracked variant
+ *
+ * Server-side filters:
+ * - inventory_total:0 = products with exactly 0 inventory
+ * - -inventory_total:* = products where inventory_total field is null (untracked)
+ *
  * @returns {Promise<Array>} - Array of product objects with untracked inventory
  */
 async function getActiveProductsWithUntrackedInventory() {
@@ -337,7 +342,7 @@ async function getActiveProductsWithUntrackedInventory() {
   let productCount = 0;
   const maxProducts = 200;
   let pageCount = 0;
-  const maxPages = 50; // Safety limit (250*50 = 12,500 products checked max - you said 5000+ untracked so this is safe)
+  const maxPages = 100; // Safety limit - since we filter server-side, we may need to check more pages to find 200 untracked products with tracked:false
   let hasNextPage = true;
   let cursor = null;
 
@@ -348,12 +353,14 @@ async function getActiveProductsWithUntrackedInventory() {
 
     try {
       // Build query based on pagination
-      // Query ALL ACTIVE products (untracked products can have any inventory level, not just 0)
-      // We filter client-side for tracked:false variants
+      // Filter server-side for untracked products:
+      // - inventory_total:0 = products with exactly 0 inventory (can be untracked or tracked out-of-stock)
+      // - -inventory_total:* = products where inventory_total field is null/absent (untracked inventory)
+      // Then verify client-side that tracked === false to exclude tracked out-of-stock products
       const currentQuery = cursor
         ? `
           query($after: String) {
-            products(first: 250, query: "status:ACTIVE", after: $after) {
+            products(first: 250, query: "status:ACTIVE AND (inventory_total:0 OR -inventory_total:*)", after: $after) {
               edges {
                 node {
                   id
@@ -386,7 +393,7 @@ async function getActiveProductsWithUntrackedInventory() {
         `
         : `
           query {
-            products(first: 250, query: "status:ACTIVE") {
+            products(first: 250, query: "status:ACTIVE AND (inventory_total:0 OR -inventory_total:*)") {
               edges {
                 node {
                   id
