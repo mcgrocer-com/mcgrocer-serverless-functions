@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/crons/publish-draft-products",
-      "schedule": "0 */12 * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
