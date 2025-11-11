@@ -23,27 +23,23 @@ async function handler(req, res) {
       throw new Error('Missing required environment variable: SHOPIFY_ACCESS_TOKEN');
     }
 
-    // Step 1: Query ALL ACTIVE products and check for tracked:false variants
-    console.log('Step 1: Querying for ACTIVE products with untracked inventory variants...');
-    const queryResults = await getActiveProductsWithUntrackedInventory();
+    // Step 1: Query first page of ACTIVE products and check for tracked:false variants
+    console.log('Step 1: Querying first page of ACTIVE products...');
+    const untrackedProducts = await getActiveProductsWithUntrackedInventory();
 
     console.log(
-      `Total ACTIVE products checked: ${queryResults.totalFetched}`
-    );
-    console.log(
-      `Products with tracked:false variants found: ${queryResults.untracked.length}`
+      `Found ${untrackedProducts.length} product(s) with tracked:false variants`
     );
 
-    if (queryResults.untracked.length === 0) {
+    if (untrackedProducts.length === 0) {
       const endTime = new Date();
       const duration = endTime - startTime;
 
       return res.status(200).json({
         status: 'success',
-        message: 'No ACTIVE products with untracked inventory found',
-        totalFetched: queryResults.totalFetched,
-        untrackedFound: 0,
-        productsReverted: 0,
+        message: 'No ACTIVE products with untracked inventory found in this batch',
+        found: 0,
+        reverted: 0,
         duration: `${duration}ms`,
         timestamp: startTime.toISOString(),
       });
@@ -51,9 +47,9 @@ async function handler(req, res) {
 
     // Step 2: Revert products with untracked variants to DRAFT
     console.log(
-      `Step 2: Reverting ${queryResults.untracked.length} product(s) to DRAFT...`
+      `Step 2: Reverting ${untrackedProducts.length} product(s) to DRAFT...`
     );
-    const productIds = queryResults.untracked.map((p) => p.id);
+    const productIds = untrackedProducts.map((p) => p.id);
     const results = await batchRevertProductsToDraft(productIds);
 
     const endTime = new Date();
@@ -67,12 +63,11 @@ async function handler(req, res) {
     return res.status(200).json({
       status: 'success',
       message: 'Products reverted to DRAFT successfully',
-      totalFetched: queryResults.totalFetched,
-      untrackedFound: queryResults.untracked.length,
-      productsReverted: results.successful.length,
-      productsFailed: results.failed.length,
+      found: untrackedProducts.length,
+      reverted: results.successful.length,
+      failed: results.failed.length,
       successful: results.successful,
-      failed: results.failed,
+      failedDetails: results.failed,
       duration: `${duration}ms`,
       timestamp: startTime.toISOString(),
     });
