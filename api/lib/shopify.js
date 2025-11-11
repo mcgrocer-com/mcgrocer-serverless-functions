@@ -344,7 +344,7 @@ async function getActiveProductsWithUntrackedInventory() {
   let hasNextPage = true;
   let cursor = null;
 
-  console.log('Fetching ALL ACTIVE products matching filter (inventory_total:0 OR -inventory_total:*)...');
+  console.log('Fetching ALL ACTIVE products matching filter (-inventory_total:*)...');
 
   while (hasNextPage) {
     pageCount++;
@@ -355,7 +355,7 @@ async function getActiveProductsWithUntrackedInventory() {
       const currentQuery = cursor
         ? `
           query($after: String) {
-            products(first: 250, query: "status:ACTIVE AND (inventory_total:0 OR -inventory_total:*)", after: $after) {
+            products(first: 250, query: "status:ACTIVE AND -inventory_total:*", after: $after) {
               edges {
                 node {
                   id
@@ -374,7 +374,7 @@ async function getActiveProductsWithUntrackedInventory() {
         `
         : `
           query {
-            products(first: 250, query: "status:ACTIVE AND (inventory_total:0 OR -inventory_total:*)") {
+            products(first: 250, query: "status:ACTIVE AND -inventory_total:*") {
               edges {
                 node {
                   id
