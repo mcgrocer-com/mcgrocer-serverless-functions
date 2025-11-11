@@ -1,6 +1,7 @@
 {
   "framework": null,
   "buildCommand": "echo 'Build complete'",
+  "outputDirectory": ".",
   "crons": [
     {
       "path": "/api/crons/publish-draft-products",
