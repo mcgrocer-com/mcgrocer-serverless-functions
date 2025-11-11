@@ -23,35 +23,30 @@ async function handler(req, res) {
       throw new Error('Missing required environment variable: SHOPIFY_ACCESS_TOKEN');
     }
 
-    // Step 1: Find all ACTIVE products matching filter (inventory_total:0 OR -inventory_total:*)
-    console.log('Step 1: Querying for ACTIVE products with untracked inventory variants...');
-    const queryResults = await getActiveProductsWithUntrackedInventory();
+    // Step 1: Find first 200 ACTIVE products matching filter (inventory_total:0 OR -inventory_total:*)
+    console.log('Step 1: Querying for first 200 ACTIVE products matching filter...');
+    const productsToRevert = await getActiveProductsWithUntrackedInventory();
     console.log(
-      `Total products matching filter: ${queryResults.totalFiltered}`
-    );
-    console.log(
-      `Products with tracked===false: ${queryResults.untracked.length}`
+      `Found ${productsToRevert.length} product(s) matching filter`
     );
 
-    if (queryResults.untracked.length === 0) {
+    if (productsToRevert.length === 0) {
       const endTime = new Date();
       const duration = endTime - startTime;
 
       return res.status(200).json({
         status: 'success',
-        message: 'No ACTIVE products with untracked inventory found',
-        totalFiltered: queryResults.totalFiltered,
-        untrackedFound: 0,
+        message: 'No ACTIVE products matching filter found',
+        productsFound: 0,
         productsReverted: 0,
         duration: `${duration}ms`,
         timestamp: startTime.toISOString(),
       });
     }
 
-    // Step 2: Take only first 200 untracked products (if there are more)
-    const productsToRevert = queryResults.untracked.slice(0, 200);
+    // Step 2: Revert all matching products to DRAFT
     console.log(
-      `Step 2: Reverting ${productsToRevert.length} product(s) to DRAFT (max 200)...`
+      `Step 2: Reverting ${productsToRevert.length} product(s) to DRAFT...`
     );
     const productIds = productsToRevert.map((p) => p.id);
     const results = await batchRevertProductsToDraft(productIds);
@@ -67,8 +62,7 @@ async function handler(req, res) {
     return res.status(200).json({
       status: 'success',
       message: 'Products reverted to DRAFT successfully',
-      totalFiltered: queryResults.totalFiltered,
-      untrackedFound: queryResults.untracked.length,
+      productsFound: productsToRevert.length,
       productsReverted: results.successful.length,
       productsFailed: results.failed.length,
       successful: results.successful,
