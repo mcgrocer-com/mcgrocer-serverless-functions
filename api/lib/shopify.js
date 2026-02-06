@@ -38,18 +38,12 @@ async function shopifyGraphqlRequest(query, variables = {}) {
   }
 }
 
-/**
- * Query for all draft products with exactly 1000 total inventory
- * Filters by server-side inventory_total and verifies tracked inventory
- * Excludes products with "inventory not tracked" status
- * @returns {Promise<Array>} - Array of product objects
- */
+
 async function getDraftProductsWithExactInventory() {
   const products = [];
   let hasNextPage = true;
   let cursor = null;
 
-  // Paginate through all matching products (filtered server-side by Shopify)
   while (hasNextPage) {
     // Build query based on whether we're paginating or on first page
     const currentQuery = cursor
@@ -63,6 +57,7 @@ async function getDraftProductsWithExactInventory() {
                 handle
                 status
                 totalInventory
+                descriptionHtml
                 variants(first: 250) {
                   edges {
                     node {
@@ -92,6 +87,7 @@ async function getDraftProductsWithExactInventory() {
                 handle
                 status
                 totalInventory
+                descriptionHtml
                 variants(first: 250) {
                   edges {
                     node {
@@ -116,7 +112,7 @@ async function getDraftProductsWithExactInventory() {
     const result = await shopifyGraphqlRequest(currentQuery, variables);
     const productsData = result.products;
 
-    // Filter products with exactly 1000 inventory AND tracked inventory
+    // Filter products with exactly 1000 inventory AND tracked inventory AND description
     productsData.edges.forEach((edge) => {
       const product = edge.node;
 
@@ -124,6 +120,15 @@ async function getDraftProductsWithExactInventory() {
       if (product.totalInventory !== 1000) {
         console.warn(
           `⚠ Unexpected inventory for product ${product.id}: ${product.totalInventory} (expected 1000)`
+        );
+        return; // Skip this product
+      }
+
+      // Check if product has a description
+      const hasDescription = product.descriptionHtml && product.descriptionHtml.trim().length > 0;
+      if (!hasDescription) {
+        console.log(
+          `⊘ Skipped product with no description: ${product.title} (${product.id})`
         );
         return; // Skip this product
       }
@@ -193,7 +198,6 @@ async function getOnlineStorePublicationId() {
  * @returns {Promise<object>} - Updated product data
  */
 async function publishProduct(productId) {
-  // Step 1: Update product status to ACTIVE
   const updateQuery = `
     mutation($input: ProductInput!) {
       productUpdate(input: $input) {
@@ -292,10 +296,13 @@ async function batchPublishProducts(productIds) {
   };
 
   const chunkSize = 10; // Process 10 products in parallel at a time
+  const totalChunks = Math.ceil(productIds.length / chunkSize);
 
   // Process products in chunks to avoid overwhelming API rate limits
   for (let i = 0; i < productIds.length; i += chunkSize) {
+    const chunkIndex = Math.floor(i / chunkSize) + 1;
     const chunk = productIds.slice(i, i + chunkSize);
+    const chunkStartCount = results.successful.length;
 
     // Process all products in the chunk in parallel
     const promises = chunk.map(async (productId) => {
@@ -320,6 +327,10 @@ async function batchPublishProducts(productIds) {
 
     // Wait for the entire chunk to complete before moving to the next one
     await Promise.all(promises);
+
+    // Log cycle summary
+    const publishedThisCycle = results.successful.length - chunkStartCount;
+    console.log(`[Cycle ${chunkIndex}/${totalChunks}] Published ${publishedThisCycle} product(s) this cycle | Total published: ${results.successful.length}/${productIds.length}`);
   }
 
   return results;
