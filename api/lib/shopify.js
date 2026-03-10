@@ -39,6 +39,65 @@ async function shopifyGraphqlRequest(query, variables = {}) {
 }
 
 
+/**
+ * Validate image URLs by sending HEAD requests in batches.
+ * Only rejects products with HTTP 404/410 responses.
+ * Treats network errors/timeouts as valid to avoid false positives.
+ * @param {Array} products - Array of product objects with imageUrl
+ * @returns {Promise<Array>} - Products with reachable images
+ */
+async function validateImageUrls(products) {
+  if (products.length === 0) return products;
+
+  console.log(`Validating image URLs for ${products.length} product(s)...`);
+  const validProducts = [];
+  const batchSize = 20;
+
+  for (let i = 0; i < products.length; i += batchSize) {
+    const batch = products.slice(i, i + batchSize);
+
+    const results = await Promise.all(
+      batch.map(async (product) => {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+
+          const response = await fetch(product.imageUrl, {
+            method: 'HEAD',
+            signal: controller.signal,
+          });
+
+          clearTimeout(timeout);
+
+          if (response.status === 404 || response.status === 410) {
+            console.log(
+              `⊘ Skipped product with broken image (HTTP ${response.status}): ${product.title} (${product.id})`
+            );
+            return null;
+          }
+
+          return product;
+        } catch (error) {
+          console.warn(
+            `⚠ Could not verify image for ${product.title} (${product.id}): ${error.message}`
+          );
+          // Treat network errors/timeouts as valid to avoid false positives
+          return product;
+        }
+      })
+    );
+
+    validProducts.push(...results.filter(Boolean));
+  }
+
+  const skippedCount = products.length - validProducts.length;
+  if (skippedCount > 0) {
+    console.log(`Image validation complete: ${skippedCount} product(s) skipped due to broken images`);
+  }
+
+  return validProducts;
+}
+
 async function getDraftProductsWithExactInventory() {
   const products = [];
   let hasNextPage = true;
@@ -58,6 +117,9 @@ async function getDraftProductsWithExactInventory() {
                 status
                 totalInventory
                 descriptionHtml
+                featuredImage {
+                  url
+                }
                 variants(first: 250) {
                   edges {
                     node {
@@ -88,6 +150,9 @@ async function getDraftProductsWithExactInventory() {
                 status
                 totalInventory
                 descriptionHtml
+                featuredImage {
+                  url
+                }
                 variants(first: 250) {
                   edges {
                     node {
@@ -133,6 +198,14 @@ async function getDraftProductsWithExactInventory() {
         return; // Skip this product
       }
 
+      // Check if product has a featured image
+      if (!product.featuredImage?.url) {
+        console.log(
+          `⊘ Skipped product with no image: ${product.title} (${product.id})`
+        );
+        return; // Skip this product
+      }
+
       // Check if at least one variant has tracked inventory
       const variantEdges = product.variants?.edges || [];
       const hasTrackedInventory = variantEdges.some((variantEdge) => {
@@ -147,6 +220,7 @@ async function getDraftProductsWithExactInventory() {
           title: product.title,
           handle: product.handle,
           totalInventory: product.totalInventory,
+          imageUrl: product.featuredImage.url,
         });
       } else {
         console.log(
@@ -159,7 +233,8 @@ async function getDraftProductsWithExactInventory() {
     cursor = productsData.pageInfo.endCursor;
   }
 
-  return products;
+  const validatedProducts = await validateImageUrls(products);
+  return validatedProducts;
 }
 
 /**
