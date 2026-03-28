@@ -44,9 +44,10 @@ async function shopifyGraphqlRequest(query, variables = {}) {
  * Only rejects products with HTTP 404/410 responses.
  * Treats network errors/timeouts as valid to avoid false positives.
  * @param {Array} products - Array of product objects with imageUrl
+ * @param {number} timeoutMs - Timeout per image request in ms (default 2000)
  * @returns {Promise<Array>} - Products with reachable images
  */
-async function validateImageUrls(products) {
+async function validateImageUrls(products, timeoutMs = 2000) {
   if (products.length === 0) return products;
 
   console.log(`Validating image URLs for ${products.length} product(s)...`);
@@ -60,7 +61,7 @@ async function validateImageUrls(products) {
       batch.map(async (product) => {
         try {
           const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 5000);
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
           const response = await fetch(product.imageUrl, {
             method: 'HEAD',
@@ -238,10 +239,114 @@ async function getDraftProductsWithExactInventory() {
 }
 
 /**
- * Get the publication ID for the Online Store
+ * Fetch a single page of draft products with exact inventory, apply filters,
+ * and return a limited batch for publishing. Designed for use with self-chaining
+ * to stay within Vercel Hobby plan's 10-second timeout.
+ * @param {number} publishBatchSize - Max products to return for publishing (default 5)
+ * @returns {Promise<{products: Array, hasMore: boolean}>}
+ */
+async function getDraftProductsBatch(publishBatchSize = 5) {
+  const query = `
+    query {
+      products(first: 250, query: "status:DRAFT AND inventory_total:1000") {
+        edges {
+          node {
+            id
+            title
+            handle
+            status
+            totalInventory
+            descriptionHtml
+            featuredImage {
+              url
+            }
+            variants(first: 250) {
+              edges {
+                node {
+                  id
+                  inventoryItem {
+                    tracked
+                  }
+                }
+              }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+        }
+      }
+    }
+  `;
+
+  const result = await shopifyGraphqlRequest(query);
+  const productsData = result.products;
+
+  // Apply client-side filters
+  const candidates = [];
+  for (const edge of productsData.edges) {
+    const product = edge.node;
+
+    if (product.totalInventory !== 1000) {
+      console.warn(`⚠ Unexpected inventory for product ${product.id}: ${product.totalInventory} (expected 1000)`);
+      continue;
+    }
+
+    const hasDescription = product.descriptionHtml && product.descriptionHtml.trim().length > 0;
+    if (!hasDescription) {
+      console.log(`⊘ Skipped product with no description: ${product.title} (${product.id})`);
+      continue;
+    }
+
+    if (!product.featuredImage?.url) {
+      console.log(`⊘ Skipped product with no image: ${product.title} (${product.id})`);
+      continue;
+    }
+
+    const variantEdges = product.variants?.edges || [];
+    const hasTrackedInventory = variantEdges.some((variantEdge) => {
+      const inventoryItem = variantEdge.node.inventoryItem;
+      return inventoryItem && inventoryItem.tracked === true;
+    });
+
+    if (!hasTrackedInventory) {
+      console.log(`⊘ Skipped product with untracked inventory: ${product.title} (${product.id})`);
+      continue;
+    }
+
+    candidates.push({
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      totalInventory: product.totalInventory,
+      imageUrl: product.featuredImage.url,
+    });
+
+    // Stop collecting once we have enough candidates for image validation
+    if (candidates.length >= publishBatchSize * 2) break;
+  }
+
+  // Validate images only for our small candidate list
+  const validatedProducts = await validateImageUrls(candidates);
+
+  // Take only what we need for this batch
+  const batch = validatedProducts.slice(0, publishBatchSize);
+
+  // There are more products if the page has more results, or we found more valid candidates than we're publishing
+  const hasMore = productsData.pageInfo.hasNextPage || validatedProducts.length > publishBatchSize;
+
+  return { products: batch, hasMore: batch.length > 0 && hasMore };
+}
+
+/**
+ * Get the publication ID for the Online Store (cached per process lifetime)
  * @returns {Promise<string>} - Publication ID for Online Store
  */
+let _cachedPublicationId = null;
+
 async function getOnlineStorePublicationId() {
+  if (_cachedPublicationId) return _cachedPublicationId;
+
   const query = `
     query {
       publications(first: 10) {
@@ -264,7 +369,8 @@ async function getOnlineStorePublicationId() {
     throw new Error('Online Store publication not found');
   }
 
-  return onlineStore.node.id;
+  _cachedPublicationId = onlineStore.node.id;
+  return _cachedPublicationId;
 }
 
 /**
@@ -674,6 +780,7 @@ async function batchRevertProductsToDraft(productIds) {
 module.exports = {
   shopifyGraphqlRequest,
   getDraftProductsWithExactInventory,
+  getDraftProductsBatch,
   publishProduct,
   batchPublishProducts,
   getActiveProductsWithUntrackedInventory,
