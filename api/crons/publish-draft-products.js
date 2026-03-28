@@ -8,14 +8,26 @@ async function handler(req, res) {
   console.log(`[${startTime.toISOString()}] Cron triggered: Publish Draft Products`);
 
   try {
-    const baseUrl = `https://${req.headers.host}`;
+    const host = req.headers.host || process.env.VERCEL_URL;
+    const baseUrl = `https://${host}`;
     const workerUrl = `${baseUrl}/api/publish-batch?chain=0`;
 
+    console.log(`Host header: ${req.headers.host}`);
+    console.log(`VERCEL_URL: ${process.env.VERCEL_URL}`);
     console.log(`Triggering worker: ${workerUrl}`);
+
     const workerRes = await fetch(workerUrl);
-    const data = await workerRes.json();
+    const responseText = await workerRes.text();
 
     console.log(`Worker responded: HTTP ${workerRes.status}`);
+    console.log(`Response body (first 200 chars): ${responseText.substring(0, 200)}`);
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = { rawResponse: responseText.substring(0, 500) };
+    }
 
     return res.status(200).json({
       status: 'success',
