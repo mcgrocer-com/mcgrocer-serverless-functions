@@ -75,17 +75,17 @@ async function handler(req, res) {
 
     // Step 3: Self-chain if there are more products to process
     if (hasMore) {
-      const baseUrl = process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : `http://${req.headers.host}`;
+      const baseUrl = `https://${req.headers.host}`;
       const nextUrl = `${baseUrl}/api/crons/publish-draft-products?chain=${chain + 1}`;
 
-      console.log(`Chaining to next batch: chain ${chain + 1}`);
+      console.log(`Chaining to: ${nextUrl}`);
 
-      // Fire-and-forget — do NOT await the response
-      fetch(nextUrl).catch((err) =>
-        console.error(`Self-chain failed: ${err.message}`)
-      );
+      try {
+        const chainRes = await fetch(nextUrl);
+        console.log(`Chain ${chain + 1} triggered: HTTP ${chainRes.status}`);
+      } catch (err) {
+        console.error(`Self-chain failed: ${err.message}`);
+      }
     } else {
       console.log('No more products to process. Chain complete.');
     }
