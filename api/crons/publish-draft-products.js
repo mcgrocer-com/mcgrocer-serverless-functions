@@ -31,6 +31,7 @@ async function handler(req, res) {
     let totalPublished = 0;
     let totalFailed = 0;
     let batch = 0;
+    const processedIds = new Set();
 
     while (batch < MAX_BATCHES) {
       const elapsed = Date.now() - startTime.getTime();
@@ -42,7 +43,7 @@ async function handler(req, res) {
       batch++;
       console.log(`--- Batch ${batch} ---`);
 
-      const { products: draftProducts, hasMore } = await getDraftProductsBatch(PUBLISH_BATCH_SIZE);
+      const { products: draftProducts, hasMore } = await getDraftProductsBatch(PUBLISH_BATCH_SIZE, processedIds);
       console.log(`Found ${draftProducts.length} qualifying product(s)`);
 
       if (draftProducts.length === 0) {
@@ -52,6 +53,9 @@ async function handler(req, res) {
 
       const productIds = draftProducts.map((p) => p.id);
       const results = await batchPublishProducts(productIds);
+
+      // Track all processed IDs to skip in next batch (Shopify index is slow)
+      productIds.forEach((id) => processedIds.add(id));
 
       totalPublished += results.successful.length;
       totalFailed += results.failed.length;

@@ -245,7 +245,7 @@ async function getDraftProductsWithExactInventory() {
  * @param {number} publishBatchSize - Max products to return for publishing (default 5)
  * @returns {Promise<{products: Array, hasMore: boolean}>}
  */
-async function getDraftProductsBatch(publishBatchSize = 5) {
+async function getDraftProductsBatch(publishBatchSize = 5, excludeIds = new Set()) {
   const query = `
     query {
       products(first: 250, query: "status:DRAFT AND inventory_total:1000") {
@@ -284,22 +284,31 @@ async function getDraftProductsBatch(publishBatchSize = 5) {
 
   // Apply client-side filters
   const candidates = [];
+  let skippedNoDesc = 0;
+  let skippedNoImage = 0;
+  let skippedUntracked = 0;
+  let skippedExcluded = 0;
+
   for (const edge of productsData.edges) {
     const product = edge.node;
 
+    if (excludeIds.has(product.id)) {
+      skippedExcluded++;
+      continue;
+    }
+
     if (product.totalInventory !== 1000) {
-      console.warn(`⚠ Unexpected inventory for product ${product.id}: ${product.totalInventory} (expected 1000)`);
       continue;
     }
 
     const hasDescription = product.descriptionHtml && product.descriptionHtml.trim().length > 0;
     if (!hasDescription) {
-      console.log(`⊘ Skipped product with no description: ${product.title} (${product.id})`);
+      skippedNoDesc++;
       continue;
     }
 
     if (!product.featuredImage?.url) {
-      console.log(`⊘ Skipped product with no image: ${product.title} (${product.id})`);
+      skippedNoImage++;
       continue;
     }
 
@@ -310,7 +319,7 @@ async function getDraftProductsBatch(publishBatchSize = 5) {
     });
 
     if (!hasTrackedInventory) {
-      console.log(`⊘ Skipped product with untracked inventory: ${product.title} (${product.id})`);
+      skippedUntracked++;
       continue;
     }
 
@@ -325,6 +334,8 @@ async function getDraftProductsBatch(publishBatchSize = 5) {
     // Stop collecting once we have enough candidates for image validation
     if (candidates.length >= publishBatchSize * 2) break;
   }
+
+  console.log(`Filtered 250: ${skippedNoDesc} no desc, ${skippedNoImage} no image, ${skippedUntracked} untracked, ${skippedExcluded} already processed → ${candidates.length} candidates`);
 
   // Validate images only for our small candidate list
   const validatedProducts = await validateImageUrls(candidates);
