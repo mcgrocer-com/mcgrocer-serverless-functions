@@ -1,0 +1,105 @@
+
+const {
+  getDraftProductsBatch,
+  batchPublishProducts,
+} = require('./lib/shopify');
+
+const PUBLISH_BATCH_SIZE = 5;
+const MAX_BATCHES = 200;
+const TIME_LIMIT_MS = 6000; // Stop processing before Vercel's 10s timeout
+
+/**
+ * Batch publish handler — processes draft products in small batches within a
+ * single invocation, stopping before the timeout. Picks up remaining products
+ * on the next run since published products drop out of the DRAFT query.
+ *
+ * This endpoint is NOT behind Vercel cron auth, so it can be triggered
+ * by external cron services (e.g. cron-job.org) for more frequent runs.
+ */
+async function handler(req, res) {
+  const startTime = new Date();
+  console.log(
+    `[${startTime.toISOString()}] Starting batch publish`
+  );
+
+  try {
+    if (!process.env.SHOPIFY_STORE_NAME) {
+      throw new Error('Missing required environment variable: SHOPIFY_STORE_NAME');
+    }
+
+    if (!process.env.SHOPIFY_ACCESS_TOKEN) {
+      throw new Error('Missing required environment variable: SHOPIFY_ACCESS_TOKEN');
+    }
+
+    let totalPublished = 0;
+    let totalFailed = 0;
+    let batch = 0;
+    const processedIds = new Set();
+
+    while (batch < MAX_BATCHES) {
+      const elapsed = Date.now() - startTime.getTime();
+      if (elapsed > TIME_LIMIT_MS) {
+        console.log(`Approaching timeout (${elapsed}ms). Stopping. Will continue on next run.`);
+        break;
+      }
+
+      batch++;
+      console.log(`--- Batch ${batch} ---`);
+
+      const { products: draftProducts, hasMore } = await getDraftProductsBatch(PUBLISH_BATCH_SIZE, processedIds);
+      console.log(`Found ${draftProducts.length} qualifying product(s)`);
+
+      if (draftProducts.length === 0) {
+        console.log('No more qualifying products. All done.');
+        break;
+      }
+
+      const productIds = draftProducts.map((p) => p.id);
+      const results = await batchPublishProducts(productIds);
+
+      // Track all processed IDs to skip in next batch (Shopify index is slow)
+      productIds.forEach((id) => processedIds.add(id));
+
+      totalPublished += results.successful.length;
+      totalFailed += results.failed.length;
+
+      console.log(`Batch ${batch}: Published ${results.successful.length} | Failed ${results.failed.length}`);
+
+      if (!hasMore) {
+        console.log('No more products to process.');
+        break;
+      }
+    }
+
+    const endTime = new Date();
+    const duration = endTime - startTime;
+
+    console.log(
+      `[${endTime.toISOString()}] Batch publish completed in ${duration}ms`
+    );
+    console.log(`Total published: ${totalPublished} | Total failed: ${totalFailed} | Batches: ${batch}`);
+
+    return res.status(200).json({
+      status: 'success',
+      totalPublished,
+      totalFailed,
+      batches: batch,
+      duration: `${duration}ms`,
+      timestamp: startTime.toISOString(),
+    });
+  } catch (error) {
+    const endTime = new Date();
+    const duration = endTime - startTime;
+
+    console.error(`[${endTime.toISOString()}] Batch publish failed:`, error);
+
+    return res.status(500).json({
+      status: 'error',
+      error: error.message,
+      duration: `${duration}ms`,
+      timestamp: startTime.toISOString(),
+    });
+  }
+}
+
+module.exports = handler;
